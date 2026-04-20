@@ -15,6 +15,8 @@ import org.bukkit.potion.PotionEffectType;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.Bukkit;
+import org.bukkit.inventory.Inventory;
 
 import java.io.File;
 import java.util.*;
@@ -24,17 +26,378 @@ public class Main extends JavaPlugin implements Listener {
     private Map<UUID, List<AttributeModifier>> activeAttributes = new HashMap<>();
     private Map<UUID, List<PotionEffect>> activeEffects = new HashMap<>();
     private Map<String, TalismanData> talismans = new HashMap<>();
+    private Map<UUID, String> editingTalisman = new HashMap<>();
     
     @Override
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
         loadTalismans();
         
-        getCommand("talisman").setExecutor(new TalismanCommand(this));
+        getCommand("talisman").setExecutor((sender, cmd, label, args) -> {
+            if (!(sender instanceof Player)) {
+                sender.sendMessage("Только для игроков!");
+                return true;
+            }
+            
+            Player p = (Player) sender;
+            
+            if (!p.isOp()) {
+                p.sendMessage(ChatColor.RED + "Нет прав!");
+                return true;
+            }
+            
+            if (args.length == 0) {
+                openMainMenu(p);
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("give") && args.length >= 3) {
+                String id = args[1];
+                Player target = getServer().getPlayer(args[2]);
+                
+                if (!talismans.containsKey(id)) {
+                    p.sendMessage(ChatColor.RED + "Талисман не найден!");
+                    return true;
+                }
+                
+                if (target == null) {
+                    p.sendMessage(ChatColor.RED + "Игрок не найден!");
+                    return true;
+                }
+                
+                giveTalismanItem(target, id);
+                p.sendMessage(ChatColor.GREEN + "Талисман выдан игроку " + target.getName());
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("list")) {
+                if (talismans.isEmpty()) {
+                    p.sendMessage(ChatColor.RED + "Нет созданных талисманов!");
+                } else {
+                    p.sendMessage(ChatColor.GOLD + "Талисманы:");
+                    for (String id : talismans.keySet()) {
+                        p.sendMessage(ChatColor.GREEN + "- " + id);
+                    }
+                }
+                return true;
+            }
+            
+            if (args[0].equalsIgnoreCase("delete") && args.length >= 2) {
+                String id = args[1];
+                if (!talismans.containsKey(id)) {
+                    p.sendMessage(ChatColor.RED + "Талисман не найден!");
+                    return true;
+                }
+                deleteTalisman(id);
+                p.sendMessage(ChatColor.GREEN + "Талисман " + id + " удалён!");
+                return true;
+            }
+            
+            openMainMenu(p);
+            return true;
+        });
         
         getLogger().info("=====================================");
-        getLogger().info("TalismansPlugin v2.0 ВКЛЮЧЕН!");
+        getLogger().info("TalismansGUI v2.0 ВКЛЮЧЕН!");
+        getLogger().info("Команда: /talisman - открыть GUI");
         getLogger().info("=====================================");
+    }
+    
+    private void openMainMenu(Player p) {
+        Inventory gui = Bukkit.createInventory(null, 27, ChatColor.DARK_PURPLE + "Талисманы");
+        
+        // Создание нового талисмана
+        ItemStack createItem = new ItemStack(Material.NETHER_STAR);
+        ItemMeta createMeta = createItem.getItemMeta();
+        createMeta.setDisplayName(ChatColor.GREEN + "Создать талисман");
+        createMeta.setLore(List.of(ChatColor.GRAY + "Возьми предмет в руку и нажми"));
+        createItem.setItemMeta(createMeta);
+        gui.setItem(11, createItem);
+        
+        // Список талисманов
+        ItemStack listItem = new ItemStack(Material.BOOK);
+        ItemMeta listMeta = listItem.getItemMeta();
+        listMeta.setDisplayName(ChatColor.YELLOW + "Список талисманов");
+        listMeta.setLore(List.of(ChatColor.GRAY + "Все созданные талисманы"));
+        listItem.setItemMeta(listMeta);
+        gui.setItem(13, listItem);
+        
+        // Выдать талисман
+        ItemStack giveItem = new ItemStack(Material.GOLDEN_APPLE);
+        ItemMeta giveMeta = giveItem.getItemMeta();
+        giveMeta.setDisplayName(ChatColor.AQUA + "Выдать талисман");
+        giveMeta.setLore(List.of(ChatColor.GRAY + "Выдать талисман игроку"));
+        giveItem.setItemMeta(giveMeta);
+        gui.setItem(15, giveItem);
+        
+        p.openInventory(gui);
+    }
+    
+    private void openTalismanListMenu(Player p) {
+        int size = Math.min(54, ((talismans.size() + 8) / 9) * 9 + 9);
+        Inventory gui = Bukkit.createInventory(null, size, ChatColor.DARK_PURPLE + "Список талисманов");
+        
+        int slot = 0;
+        for (String id : talismans.keySet()) {
+            TalismanData data = talismans.get(id);
+            ItemStack item = new ItemStack(Material.getMaterial(data.material));
+            ItemMeta meta = item.getItemMeta();
+            meta.setDisplayName(ChatColor.GREEN + data.name);
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "ID: " + id);
+            lore.add("");
+            for (Map.Entry<Attribute, Double> entry : data.attributes.entrySet()) {
+                String attrName = getAttributeName(entry.getKey());
+                double value = entry.getValue();
+                String color = value > 0 ? "§a+" : "§c";
+                lore.add(ChatColor.GRAY + attrName + ": " + color + value);
+            }
+            for (PotionEffect effect : data.effects) {
+                lore.add(ChatColor.GRAY + "Эффект: " + effect.getType().getName() + " " + (effect.getAmplifier() + 1));
+            }
+            lore.add("");
+            lore.add(ChatColor.YELLOW + "ЛКМ - Выдать себе");
+            lore.add(ChatColor.RED + "ПКМ - Удалить");
+            meta.setLore(lore);
+            item.setItemMeta(meta);
+            gui.setItem(slot, item);
+            slot++;
+        }
+        
+        p.openInventory(gui);
+    }
+    
+    private void openCreateMenu(Player p) {
+        ItemStack itemInHand = p.getInventory().getItemInMainHand();
+        if (itemInHand.getType() == Material.AIR) {
+            p.sendMessage(ChatColor.RED + "Возьми предмет в руку!");
+            p.closeInventory();
+            return;
+        }
+        
+        String id = "talisman_" + System.currentTimeMillis();
+        String name = ChatColor.GREEN + "Новый талисман";
+        String material = itemInHand.getType().name();
+        
+        Map<Attribute, Double> attributes = new HashMap<>();
+        List<PotionEffect> effects = new ArrayList<>();
+        
+        saveTalisman(id, name, material, id, attributes, effects);
+        editingTalisman.put(p.getUniqueId(), id);
+        
+        openEditMenu(p, id);
+    }
+    
+    private void openEditMenu(Player p, String id) {
+        TalismanData data = talismans.get(id);
+        if (data == null) return;
+        
+        Inventory gui = Bukkit.createInventory(null, 54, ChatColor.DARK_PURPLE + "Редактирование: " + data.name);
+        
+        // Название
+        ItemStack nameItem = new ItemStack(Material.NAME_TAG);
+        ItemMeta nameMeta = nameItem.getItemMeta();
+        nameMeta.setDisplayName(ChatColor.YELLOW + "Изменить название");
+        nameMeta.setLore(List.of(ChatColor.GRAY + "Текущее: " + ChatColor.RESET + data.name));
+        nameItem.setItemMeta(nameMeta);
+        gui.setItem(0, nameItem);
+        
+        // Атрибуты
+        ItemStack attrItem = new ItemStack(Material.DIAMOND_SWORD);
+        ItemMeta attrMeta = attrItem.getItemMeta();
+        attrMeta.setDisplayName(ChatColor.RED + "Атрибуты");
+        attrMeta.setLore(getAttributeLore(data.attributes));
+        attrItem.setItemMeta(attrMeta);
+        gui.setItem(20, attrItem);
+        
+        // Эффекты
+        ItemStack effectItem = new ItemStack(Material.POTION);
+        ItemMeta effectMeta = effectItem.getItemMeta();
+        effectMeta.setDisplayName(ChatColor.LIGHT_PURPLE + "Эффекты зелий");
+        effectMeta.setLore(getEffectLore(data.effects));
+        effectItem.setItemMeta(effectMeta);
+        gui.setItem(22, effectItem);
+        
+        // Сохранить и выдать
+        ItemStack saveItem = new ItemStack(Material.EMERALD);
+        ItemMeta saveMeta = saveItem.getItemMeta();
+        saveMeta.setDisplayName(ChatColor.GREEN + "Сохранить и выдать себе");
+        saveItem.setItemMeta(saveMeta);
+        gui.setItem(49, saveItem);
+        
+        p.openInventory(gui);
+    }
+    
+    private void openAttributeMenu(Player p, String id) {
+        TalismanData data = talismans.get(id);
+        if (data == null) return;
+        
+        Inventory gui = Bukkit.createInventory(null, 27, ChatColor.RED + "Атрибуты");
+        
+        String[] attrs = {"ATTACK_DAMAGE", "ARMOR", "MAX_HEALTH", "MOVEMENT_SPEED", "ATTACK_SPEED", "LUCK", "KNOCKBACK_RESISTANCE"};
+        String[] displayNames = {"🗡 Урон", "🛡 Броня", "❤ Здоровье", "🏃 Скорость", "⚡ Скорость атаки", "🍀 Удача", "💪 Сопротивление откату"};
+        
+        for (int i = 0; i < attrs.length; i++) {
+            Attribute attr = getAttributeByName(attrs[i]);
+            double current = data.attributes.getOrDefault(attr, 0.0);
+            
+            ItemStack item = new ItemStack(Material.PAPER);
+            ItemMeta meta = item.getItemMeta();
+            meta.setDisplayName(ChatColor.YELLOW + displayNames[i]);
+            String color = current > 0 ? "§a+" : (current < 0 ? "§c" : "§7");
+            meta.setLore(List.of(
+                ChatColor.GRAY + "Текущее значение: " + color + current,
+                "",
+                ChatColor.GREEN + "ЛКМ: +1",
+                ChatColor.RED + "ПКМ: -1",
+                ChatColor.GOLD + "Shift+ЛКМ: +10",
+                ChatColor.GOLD + "Shift+ПКМ: -10"
+            ));
+            item.setItemMeta(meta);
+            gui.setItem(i, item);
+        }
+        
+        // Кнопка назад
+        ItemStack backItem = new ItemStack(Material.ARROW);
+        ItemMeta backMeta = backItem.getItemMeta();
+        backMeta.setDisplayName(ChatColor.GRAY + "Назад");
+        backItem.setItemMeta(backMeta);
+        gui.setItem(26, backItem);
+        
+        p.openInventory(gui);
+        editingTalisman.put(p.getUniqueId(), id);
+    }
+    
+    private List<String> getAttributeLore(Map<Attribute, Double> attributes) {
+        List<String> lore = new ArrayList<>();
+        for (Map.Entry<Attribute, Double> entry : attributes.entrySet()) {
+            String name = getAttributeName(entry.getKey());
+            double value = entry.getValue();
+            String color = value > 0 ? "§a+" : (value < 0 ? "§c" : "§7");
+            lore.add(ChatColor.GRAY + name + ": " + color + value);
+        }
+        if (lore.isEmpty()) {
+            lore.add(ChatColor.GRAY + "Нет атрибутов");
+        }
+        lore.add("");
+        lore.add(ChatColor.YELLOW + "Нажми для редактирования");
+        return lore;
+    }
+    
+    private List<String> getEffectLore(List<PotionEffect> effects) {
+        List<String> lore = new ArrayList<>();
+        for (PotionEffect effect : effects) {
+            lore.add(ChatColor.GRAY + effect.getType().getName() + " " + (effect.getAmplifier() + 1));
+        }
+        if (lore.isEmpty()) {
+            lore.add(ChatColor.GRAY + "Нет эффектов");
+        }
+        lore.add("");
+        lore.add(ChatColor.YELLOW + "Нажми для редактирования");
+        return lore;
+    }
+    
+    @Override
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (cmd.getName().equalsIgnoreCase("talisman")) {
+            if (args.length == 0) {
+                openMainMenu((Player) sender);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    @EventHandler
+    public void onInventoryClick(org.bukkit.event.inventory.InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player)) return;
+        Player p = (Player) event.getWhoClicked();
+        String title = event.getView().getTitle();
+        
+        if (title.equals(ChatColor.DARK_PURPLE + "Талисманы")) {
+            event.setCancelled(true);
+            int slot = event.getRawSlot();
+            
+            if (slot == 11) {
+                openCreateMenu(p);
+            } else if (slot == 13) {
+                openTalismanListMenu(p);
+            } else if (slot == 15) {
+                p.sendMessage(ChatColor.YELLOW + "Используй команду: /talisman give <id> <игрок>");
+            }
+        }
+        else if (title.equals(ChatColor.DARK_PURPLE + "Список талисманов")) {
+            event.setCancelled(true);
+            int slot = event.getRawSlot();
+            if (slot >= 0 && slot < talismans.size()) {
+                String id = talismans.keySet().toArray(new String[0])[slot];
+                if (event.isLeftClick()) {
+                    giveTalismanItem(p, id);
+                    p.sendMessage(ChatColor.GREEN + "Талисман выдан себе!");
+                } else if (event.isRightClick()) {
+                    deleteTalisman(id);
+                    p.sendMessage(ChatColor.RED + "Талисман удалён!");
+                    openTalismanListMenu(p);
+                }
+            }
+        }
+        else if (title.contains(ChatColor.RED + "Атрибуты")) {
+            event.setCancelled(true);
+            int slot = event.getRawSlot();
+            String id = editingTalisman.get(p.getUniqueId());
+            if (id == null) return;
+            
+            TalismanData data = talismans.get(id);
+            if (data == null) return;
+            
+            if (slot == 26) {
+                openEditMenu(p, id);
+                return;
+            }
+            
+            String[] attrs = {"ATTACK_DAMAGE", "ARMOR", "MAX_HEALTH", "MOVEMENT_SPEED", "ATTACK_SPEED", "LUCK", "KNOCKBACK_RESISTANCE"};
+            if (slot >= 0 && slot < attrs.length) {
+                Attribute attr = getAttributeByName(attrs[slot]);
+                double current = data.attributes.getOrDefault(attr, 0.0);
+                double delta = 0;
+                
+                if (event.isShiftClick()) {
+                    delta = event.isLeftClick() ? 10 : (event.isRightClick() ? -10 : 0);
+                } else {
+                    delta = event.isLeftClick() ? 1 : (event.isRightClick() ? -1 : 0);
+                }
+                
+                if (delta != 0) {
+                    double newValue = current + delta;
+                    Map<Attribute, Double> newAttributes = new HashMap<>(data.attributes);
+                    if (Math.abs(newValue) < 0.01) {
+                        newAttributes.remove(attr);
+                    } else {
+                        newAttributes.put(attr, newValue);
+                    }
+                    saveTalisman(id, data.name, data.material, id, newAttributes, data.effects);
+                    openAttributeMenu(p, id);
+                }
+            }
+        }
+        else if (title.contains(ChatColor.DARK_PURPLE + "Редактирование:")) {
+            event.setCancelled(true);
+            int slot = event.getRawSlot();
+            String id = null;
+            for (String talismanId : talismans.keySet()) {
+                id = talismanId;
+                break;
+            }
+            if (id == null) return;
+            
+            if (slot == 20) {
+                openAttributeMenu(p, id);
+            } else if (slot == 49) {
+                giveTalismanItem(p, id);
+                p.sendMessage(ChatColor.GREEN + "Талисман выдан себе!");
+                p.closeInventory();
+            }
+        }
     }
     
     @Override
@@ -48,25 +411,31 @@ public class Main extends JavaPlugin implements Listener {
             }
         }
         for (UUID uuid : activeEffects.keySet()) {
-            Player p = getServer().getPlayer(uuid);
+            Player p = getServer().Player(uuid);
             if (p != null) {
                 for (PotionEffect effect : activeEffects.get(uuid)) {
                     p.removePotionEffect(effect.getType());
                 }
             }
         }
-        getLogger().info("TalismansPlugin выключен!");
+        getLogger().info("TalismansGUI выключен!");
     }
     
     private void removeAttributeModifier(Player p, AttributeModifier mod) {
-        // Упрощённая версия — просто обновляем атрибуты при снятии
-        p.getAttribute(Attribute.ATTACK_DAMAGE).removeModifier(mod);
-        p.getAttribute(Attribute.ARMOR).removeModifier(mod);
-        p.getAttribute(Attribute.MAX_HEALTH).removeModifier(mod);
-        p.getAttribute(Attribute.MOVEMENT_SPEED).removeModifier(mod);
-        p.getAttribute(Attribute.ATTACK_SPEED).removeModifier(mod);
-        p.getAttribute(Attribute.LUCK).removeModifier(mod);
-        p.getAttribute(Attribute.KNOCKBACK_RESISTANCE).removeModifier(mod);
+        if (p.getAttribute(Attribute.ATTACK_DAMAGE) != null)
+            p.getAttribute(Attribute.ATTACK_DAMAGE).removeModifier(mod);
+        if (p.getAttribute(Attribute.ARMOR) != null)
+            p.getAttribute(Attribute.ARMOR).removeModifier(mod);
+        if (p.getAttribute(Attribute.MAX_HEALTH) != null)
+            p.getAttribute(Attribute.MAX_HEALTH).removeModifier(mod);
+        if (p.getAttribute(Attribute.MOVEMENT_SPEED) != null)
+            p.getAttribute(Attribute.MOVEMENT_SPEED).removeModifier(mod);
+        if (p.getAttribute(Attribute.ATTACK_SPEED) != null)
+            p.getAttribute(Attribute.ATTACK_SPEED).removeModifier(mod);
+        if (p.getAttribute(Attribute.LUCK) != null)
+            p.getAttribute(Attribute.LUCK).removeModifier(mod);
+        if (p.getAttribute(Attribute.KNOCKBACK_RESISTANCE) != null)
+            p.getAttribute(Attribute.KNOCKBACK_RESISTANCE).removeModifier(mod);
     }
     
     public void loadTalismans() {
@@ -185,25 +554,8 @@ public class Main extends JavaPlugin implements Listener {
             AttributeModifier mod = new AttributeModifier(UUID.randomUUID(), "talisman_" + id, 
                 entry.getValue(), AttributeModifier.Operation.ADD_NUMBER);
             
-            if (entry.getKey() == Attribute.ATTACK_DAMAGE) {
-                p.getAttribute(Attribute.ATTACK_DAMAGE).addModifier(mod);
-            } else if (entry.getKey() == Attribute.ARMOR) {
-                p.getAttribute(Attribute.ARMOR).addModifier(mod);
-            } else if (entry.getKey() == Attribute.MAX_HEALTH) {
-                p.getAttribute(Attribute.MAX_HEALTH).addModifier(mod);
-                double newHealth = p.getHealth() + entry.getValue();
-                if (newHealth > p.getAttribute(Attribute.MAX_HEALTH).getValue()) {
-                    newHealth = p.getAttribute(Attribute.MAX_HEALTH).getValue();
-                }
-                p.setHealth(newHealth);
-            } else if (entry.getKey() == Attribute.MOVEMENT_SPEED) {
-                p.getAttribute(Attribute.MOVEMENT_SPEED).addModifier(mod);
-            } else if (entry.getKey() == Attribute.ATTACK_SPEED) {
-                p.getAttribute(Attribute.ATTACK_SPEED).addModifier(mod);
-            } else if (entry.getKey() == Attribute.LUCK) {
-                p.getAttribute(Attribute.LUCK).addModifier(mod);
-            } else if (entry.getKey() == Attribute.KNOCKBACK_RESISTANCE) {
-                p.getAttribute(Attribute.KNOCKBACK_RESISTANCE).addModifier(mod);
+            if (p.getAttribute(entry.getKey()) != null) {
+                p.getAttribute(entry.getKey()).addModifier(mod);
             }
             modifiers.add(mod);
         }
@@ -221,13 +573,9 @@ public class Main extends JavaPlugin implements Listener {
     public void removeTalisman(Player p) {
         if (activeAttributes.containsKey(p.getUniqueId())) {
             for (AttributeModifier mod : activeAttributes.get(p.getUniqueId())) {
-                p.getAttribute(Attribute.ATTACK_DAMAGE).removeModifier(mod);
-                p.getAttribute(Attribute.ARMOR).removeModifier(mod);
-                p.getAttribute(Attribute.MAX_HEALTH).removeModifier(mod);
-                p.getAttribute(Attribute.MOVEMENT_SPEED).removeModifier(mod);
-                p.getAttribute(Attribute.ATTACK_SPEED).removeModifier(mod);
-                p.getAttribute(Attribute.LUCK).removeModifier(mod);
-                p.getAttribute(Attribute.KNOCKBACK_RESISTANCE).removeModifier(mod);
+                if (mod.getAttribute() != null && p.getAttribute(mod.getAttribute()) != null) {
+                    p.getAttribute(mod.getAttribute()).removeModifier(mod);
+                }
             }
             activeAttributes.remove(p.getUniqueId());
         }
@@ -255,7 +603,7 @@ public class Main extends JavaPlugin implements Listener {
         for (Map.Entry<Attribute, Double> entry : data.attributes.entrySet()) {
             String attrName = getAttributeName(entry.getKey());
             double value = entry.getValue();
-            String color = value > 0 ? "§a+" : "§c";
+            String color = value > 0 ? "§a+" : (value < 0 ? "§c" : "§7");
             lore.add(ChatColor.GRAY + attrName + ": " + color + value);
         }
         
