@@ -4,5 +4,4 @@ main: com.talismans.Main
 api-version: 1.21
 commands:
   talisman:
-    description: Открыть GUI для создания талисманов
-    aliases: [t]
+    description: Открыть GUI
