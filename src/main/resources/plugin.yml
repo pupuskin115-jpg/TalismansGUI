@@ -1,0 +1,8 @@
+name: TalismansPlugin
+version: 2.0
+main: com.talismans.Main
+api-version: 1.21
+commands:
+  talisman:
+    description: Главная команда плагина
+    aliases: [t]
